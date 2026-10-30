@@ -12,7 +12,7 @@ function schedule(){timer=setTimeout(()=>{step++;overview=false;renderFrame();if
 function toggle(){if(timer){stop();return;}if(step>=trace.events.length)step=0;overview=false;$('play').textContent='Ⅱ 暂停';$('play').setAttribute('aria-pressed','true');renderFrame();schedule();}
 function seek(n,all=false){stop();step=Math.max(0,Math.min(trace.events.length,n));overview=all;renderFrame();}
 function readHash(){const [id,query='']=location.hash.slice(1).split('?');const q=new URLSearchParams(query);scene=scenarios.some(s=>s.id===id)?id:'message';arch=architectures.some(a=>a.id===q.get('arch'))?q.get('arch'):'loongarch';sync=q.get('sync')==='1';if(scene==='dbar')arch='loongarch';}
-function saveHash(){history.replaceState(null,'',`#${scene}?arch=${arch}&sync=${sync?1:0}`);}
+function saveHash(){history.replaceState(null,'',`#${scene}?arch=${arch}&sync=${sync?1:0}`);document.dispatchEvent(new Event('lab-state-change'));}
 function rebuild(){
  stop();trace=buildTrace(scene,arch,sync);step=trace.events.length;overview=true;operation=0;
  $('operation').innerHTML=trace.events.map((e,i)=>`<option value="${i}">${i+1}. ${escape(trace.actors[e.lane])}：${escape(e.lines.join(' · '))}</option>`).join('');
@@ -44,7 +44,7 @@ $('architecture').addEventListener('change',e=>{arch=e.target.value;rebuild();sa
 $('sync').addEventListener('change',e=>{sync=e.target.checked;rebuild();saveHash();});
 $('play').addEventListener('click',toggle);$('prev').addEventListener('click',()=>seek(step-1));$('next').addEventListener('click',()=>seek(step+1));$('reset').addEventListener('click',()=>seek(0));$('overview').addEventListener('click',()=>seek(trace.events.length,true));$('progress').addEventListener('input',e=>seek(Number(e.target.value)));$('speed').addEventListener('change',()=>{if(timer){clearTimeout(timer);schedule();}});
 window.addEventListener('hashchange',()=>{readHash();rebuild();});
-window.addEventListener('keydown',e=>{if(e.target.closest('input,select,button,a,summary,textarea')||e.ctrlKey||e.metaKey||e.altKey)return;if(e.code==='Space'){e.preventDefault();toggle();}else if(e.key==='ArrowRight'){e.preventDefault();seek(step+1);}else if(e.key==='ArrowLeft'){e.preventDefault();seek(step-1);}});
+window.addEventListener('keydown',e=>{if($('expert').hidden||e.target.closest('input,select,button,a,summary,textarea')||e.ctrlKey||e.metaKey||e.altKey)return;if(e.code==='Space'){e.preventDefault();toggle();}else if(e.key==='ArrowRight'){e.preventDefault();seek(step+1);}else if(e.key==='ArrowLeft'){e.preventDefault();seek(step-1);}});
 function renderStructure(){
  const context=operationContext(trace,operation);$('operation').value=operation;
  if(!context.nodes.includes(selectedNode))selectedNode=context.nodes.includes('lsu')?'lsu':context.nodes[0];
@@ -62,7 +62,7 @@ function renderStructure(){
 }
 function showNode(id){const n=components.find(n=>n.id===id);selectedNode=id;$('node-title').textContent=n.name;$('node-role').textContent=n.role;$('node-guarantee').textContent=n.guarantee;$('node-limit').textContent=n.limit;document.querySelectorAll('[data-component]').forEach(e=>e.classList.toggle('selected',e.dataset.component===id));}
 function activateMap(e){const node=e.target.closest('[data-component]');if(node)showNode(node.dataset.component);}
-document.querySelectorAll('[data-scroll]').forEach(button=>button.addEventListener('click',()=>$(button.dataset.scroll).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'})));
+document.querySelectorAll('[data-scroll]').forEach(button=>button.addEventListener('click',()=>{const target=$(button.dataset.scroll);const disclosure=target.closest('details');if(disclosure)disclosure.open=true;target.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});}));
 function activateEvent(e){const node=e.target.closest('[data-event]');if(node)seek(Number(node.dataset.event)+1);}
 $('operation').addEventListener('change',e=>seek(Number(e.target.value)+1));
 $('structure').addEventListener('click',activateMap);$('timeline').addEventListener('click',activateEvent);
