@@ -1,44 +1,70 @@
-import {scenarios, sources, frame} from './model.mjs';
-const $ = id=>document.getElementById(id);
-const escape = s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let scene=scenarios.find(s=>s.id===location.hash.slice(1))||scenarios[1],step=0,timer=null;
-let group='';
-$('navigation').innerHTML=scenarios.map((s,i)=>{let heading=s.group!==group?`<div class="nav-group">${s.group}</div>`:'';group=s.group;return `${heading}<a class="nav-link" href="#${s.id}" data-scene="${s.id}"><b>${String(i+1).padStart(2,'0')}</b>${s.name}</a>`}).join('');
+import {scenarios, architectures, sources, buildTrace, components, connections, operationContext, orderingChain} from './model.mjs';
+const $=id=>document.getElementById(id);
+const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pristine='<!doctype html>\n'+document.documentElement.outerHTML;
+$('download').href=URL.createObjectURL(new Blob([pristine],{type:'text/html;charset=utf-8'}));
+let scene='message',arch='loongarch',sync=false,trace,step=0,timer=null,overview=true,operation=0,selectedNode='lsu';
+$('scene').innerHTML=scenarios.map(s=>`<option value="${s.id}">${escape(s.name)}</option>`).join('');
+$('architecture').innerHTML=architectures.map(a=>`<option value="${a.id}">${escape(a.name)}</option>`).join('');
+$('comparison').innerHTML=architectures.map(a=>`<tr><td>${escape(a.name)}</td><td>${a.orderedStores?'禁止':'允许'}</td><td>允许</td><td><code>${escape(a.full)}</code></td></tr>`).join('');
 function stop(){clearTimeout(timer);timer=null;$('play').textContent='▶ 播放';$('play').setAttribute('aria-pressed','false');}
-function schedule(){timer=setTimeout(()=>{if(step<scene.steps.length-1){step++;renderFrame();schedule();}else stop();},Number($('speed').value));}
-function toggle(){if(timer){stop();return;}if(step===scene.steps.length-1)step=0;$('play').textContent='Ⅱ 暂停';$('play').setAttribute('aria-pressed','true');renderFrame();schedule();}
-function seek(n){stop();step=Math.max(0,Math.min(scene.steps.length-1,n));renderFrame();}
-function renderScene(){
- stop();step=0;
- document.title=`${scene.name} · 计算机系统顺序实验室`;
- document.querySelectorAll('[data-scene]').forEach(a=>{if(a.dataset.scene===scene.id)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
- $('eyebrow').textContent=`EXPERIMENT ${String(scenarios.indexOf(scene)+1).padStart(2,'0')} / ${scene.group}`;
- for(const key of ['title','lead','scope','takeaway','why','fix'])$(key).textContent=scene[key];
- $('experiment-title').textContent=scene.name;
- $('code').innerHTML=scene.code.map(([label,code])=>`<div class="code-card"><span>${escape(label)}</span><pre>${escape(code)}</pre></div>`).join('');
- $('progress').max=scene.steps.length-1;
- $('lanes').innerHTML=scene.lanes.map((l,i)=>`<div class="lane" data-kind="${l.kind}" aria-label="${escape(l.name)}"><div class="lane-heading"><h3>${escape(l.name)}</h3><span class="tag">${escape(l.tag)}</span></div><div class="flow">${scene.labels.map(label=>`<div class="cell"><small>${escape(label)}</small><strong></strong><i class="packet" aria-hidden="true"></i></div>`).join('')}</div><div class="lane-status" id="status-${i}"></div></div>`).join('');
- $('refs').innerHTML=scene.refs.map(k=>`<li><a href="${sources[k][1]}" target="_blank" rel="noopener noreferrer">${escape(sources[k][0])} ↗</a></li>`).join('');
+function schedule(){timer=setTimeout(()=>{step++;overview=false;renderFrame();if(step>=trace.events.length)stop();else schedule();},Number($('speed').value));}
+function toggle(){if(timer){stop();return;}if(step>=trace.events.length)step=0;overview=false;$('play').textContent='Ⅱ 暂停';$('play').setAttribute('aria-pressed','true');renderFrame();schedule();}
+function seek(n,all=false){stop();step=Math.max(0,Math.min(trace.events.length,n));overview=all;renderFrame();}
+function readHash(){const [id,query='']=location.hash.slice(1).split('?');const q=new URLSearchParams(query);scene=scenarios.some(s=>s.id===id)?id:'message';arch=architectures.some(a=>a.id===q.get('arch'))?q.get('arch'):'loongarch';sync=q.get('sync')==='1';if(scene==='dbar')arch='loongarch';}
+function saveHash(){history.replaceState(null,'',`#${scene}?arch=${arch}&sync=${sync?1:0}`);}
+function rebuild(){
+ stop();trace=buildTrace(scene,arch,sync);step=trace.events.length;overview=true;operation=0;
+ $('operation').innerHTML=trace.events.map((e,i)=>`<option value="${i}">${i+1}. ${escape(trace.actors[e.lane])}：${escape(e.lines.join(' · '))}</option>`).join('');
+ $('scene').value=scene;$('architecture').value=arch;$('architecture').disabled=scene==='dbar';$('arch-restriction').hidden=scene!=='dbar';$('sync').checked=sync;
+ $('title').textContent=trace.scenario.title;$('sync-label').textContent=trace.scenario.toggle;$('arch-model').textContent=trace.arch.model;$('scope').textContent=trace.scenario.scope;
+ $('arch-note').textContent=trace.arch.note+(scene==='message'?` 发布示例：${trace.arch.release}；接收示例：${trace.arch.acquire}。`:'');
+ $('why').textContent=trace.scenario.why;$('fix').textContent=trace.scenario.fix;
+ $('code').innerHTML=trace.code.map(([title,code])=>`<div class="code-card"><span>${escape(title)}</span><pre>${escape(code)}</pre></div>`).join('');
+ const refs=[...new Set([...trace.arch.refs,...trace.scenario.refs,'linux','dma','io',...components.flatMap(c=>c.refs)])];$('refs').innerHTML=refs.map(k=>`<li><a href="${sources[k][1]}" target="_blank" rel="noopener noreferrer">${escape(sources[k][0])} ↗</a></li>`).join('');
+ $('progress').max=trace.events.length;document.title=`${trace.scenario.name} · ${trace.arch.name} · Ordering Lab`;
  renderFrame();
 }
 function renderFrame(){
- $('counter').textContent=`${scene.lanes.length} 条路径并排对照`;
- $('step-number').textContent=`${step}/${scene.steps.length-1}`;
- $('step-label').textContent=`STEP ${String(step).padStart(2,'0')}`;
- $('progress').value=step;$('progress').setAttribute('aria-valuetext',`${step}：${scene.steps[step]}`);
- $('narration').textContent=scene.steps[step];$('prev').disabled=step===0;$('next').disabled=step===scene.steps.length-1;
- document.querySelectorAll('.lane').forEach((el,i)=>{
-  const f=frame(scene.id,scene.lanes[i].kind,step);
-  el.querySelectorAll('.cell').forEach((cell,j)=>{cell.querySelector('strong').textContent=f.cells[j];cell.classList.toggle('active',j===f.focus);cell.classList.remove('sending');if(step&&j===Math.max(0,f.focus-1)&&j<3){void cell.offsetWidth;cell.classList.add('sending');}});
-  const status=$(`status-${i}`);status.textContent=f.status;status.className=`lane-status ${f.tone}`;
- });
+ const n=trace.events.length,current=overview?-1:step-1;const row=86,top=68,height=top+n*row+30;const x=[240,720];
+ const y=i=>top+i*row;
+ let svg=`<title id="diagram-title">${escape(trace.scenario.name)}，${escape(trace.arch.name)}，${sync?'已加入同步':'未加入同步'}</title><desc id="diagram-description">从上往下阅读。${trace.events.map((e,i)=>`${i+1}、${trace.actors[e.lane]}：${e.lines.join('，')}${i>=step?'（未到此步）':''}`).map(escape).join('。')}</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 4 L0 8 Z" fill="#9ca3af"/></marker></defs>`;
+ svg+=trace.actors.map((actor,l)=>`<text class="actor" x="${x[l]}" y="31" text-anchor="middle">${escape(actor)}</text><line class="lifeline" x1="${x[l]}" x2="${x[l]}" y1="47" y2="${height-16}"/>`).join('');
+ for(let i=0;i<n;i++){const e=trace.events[i];if(e.from){const from=trace.events.findIndex(f=>f.id===e.from);const a=trace.events[from];svg+=`<path class="connector ${i>=step?'future':''} ${i===current?'current':''}" d="M${x[a.lane]},${y(from)+57} L${x[e.lane]},${y(i)-3}" marker-end="url(#arrow)"/>`;}}
+ svg+=trace.events.map((e,i)=>`<g data-event="${i}" role="button" tabindex="0" aria-label="步骤 ${i+1}：${escape(e.lines.join('，'))}；点击查看协作环节" class="event ${e.tone} ${i>=step?'future':''} ${i===current?'current':''}"><rect class="box" x="${x[e.lane]-205}" y="${y(i)}" width="410" height="57" rx="5"/><text class="event-number" x="${x[e.lane]-194}" y="${y(i)+15}">${String(i+1).padStart(2,'0')}</text><text class="event-title" x="${x[e.lane]}" y="${y(i)+24}" text-anchor="middle">${escape(e.lines[0])}</text><text class="event-detail" x="${x[e.lane]}" y="${y(i)+44}" text-anchor="middle">${escape(e.lines[1]||'')}</text></g>`).join('');
+ $('timeline').setAttribute('viewBox',`0 0 960 ${height}`);$('timeline').innerHTML=svg;
+ $('progress').value=step;$('progress').setAttribute('aria-valuetext',overview?'完整路径':`${step} / ${n}`);$('step-count').textContent=`${step} / ${n}`;$('prev').disabled=step===0;$('next').disabled=step===n;
+ $('step-label').textContent=overview?'完整路径':step===0?'初始状态':`STEP ${String(step).padStart(2,'0')}`;
+ $('narration').textContent=overview?'上图显示本次选择的一条完整执行路径。切换架构或同步开关即可对照；点击播放，可从头逐步观察。':step===0?'即将开始。尚未发生的事件淡化显示；时间步仅表示示意顺序，不代表硬件周期。':trace.events[step-1].note;
+ if(!overview)operation=Math.max(0,step-1);renderStructure();
+ const pending=step<trace.resultAt;$('outcome-panel').className=`outcome ${pending?'pending':trace.tone}`;$('outcome-label').textContent=pending?'尚未得到结果':'这条路径的结果';$('outcome').textContent=pending?'继续单步，观察何时形成结果。':trace.outcome;
 }
-$('play').addEventListener('click',toggle);$('prev').addEventListener('click',()=>seek(step-1));$('next').addEventListener('click',()=>seek(step+1));$('reset').addEventListener('click',()=>seek(0));$('progress').addEventListener('input',e=>seek(Number(e.target.value)));$('speed').addEventListener('change',()=>{if(timer){clearTimeout(timer);schedule();}});
-window.addEventListener('hashchange',()=>{const next=scenarios.find(s=>s.id===location.hash.slice(1));if(next&&next!==scene){scene=next;renderScene();}});
-document.addEventListener('keydown',e=>{if(e.target.closest('input,select,button,a,summary,textarea')||e.ctrlKey||e.metaKey||e.altKey)return;if(e.code==='Space'){e.preventDefault();toggle();}else if(e.key==='ArrowRight'){e.preventDefault();seek(step+1);}else if(e.key==='ArrowLeft'){e.preventDefault();seek(step-1);}});
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});
-$('source-jump').addEventListener('click',()=>$('references').open=true);
-// Save a pristine standalone document, not the currently mutated experimental state.
-const pristine='<!doctype html>\n'+document.documentElement.outerHTML;
-$('download').href=URL.createObjectURL(new Blob([pristine],{type:'text/html;charset=utf-8'}));
-renderScene();
+$('scene').addEventListener('change',e=>{scene=e.target.value;if(scene==='dbar')arch='loongarch';rebuild();saveHash();});
+$('architecture').addEventListener('change',e=>{arch=e.target.value;rebuild();saveHash();});
+$('sync').addEventListener('change',e=>{sync=e.target.checked;rebuild();saveHash();});
+$('play').addEventListener('click',toggle);$('prev').addEventListener('click',()=>seek(step-1));$('next').addEventListener('click',()=>seek(step+1));$('reset').addEventListener('click',()=>seek(0));$('overview').addEventListener('click',()=>seek(trace.events.length,true));$('progress').addEventListener('input',e=>seek(Number(e.target.value)));$('speed').addEventListener('change',()=>{if(timer){clearTimeout(timer);schedule();}});
+window.addEventListener('hashchange',()=>{readHash();rebuild();});
+window.addEventListener('keydown',e=>{if(e.target.closest('input,select,button,a,summary,textarea')||e.ctrlKey||e.metaKey||e.altKey)return;if(e.code==='Space'){e.preventDefault();toggle();}else if(e.key==='ArrowRight'){e.preventDefault();seek(step+1);}else if(e.key==='ArrowLeft'){e.preventDefault();seek(step-1);}});
+function renderStructure(){
+ const context=operationContext(trace,operation);$('operation').value=operation;
+ if(!context.nodes.includes(selectedNode))selectedNode=context.nodes.includes('lsu')?'lsu':context.nodes[0];
+ const active=new Set(context.nodes), byId=Object.fromEntries(components.map(n=>[n.id,n]));
+ let svg='<defs><marker id="structure-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="#9aa5b6"/></marker></defs>';
+ for(const edge of connections){const a=byId[edge.from],b=byId[edge.to];let path,labelX,labelY;
+  if(edge.from==='lsu'&&edge.to==='cache'){path='M800 70 V100 H160 V130';labelX=320;labelY=95;}
+  else if(a.y===b.y){path=`M${a.x+116} ${a.y} H${b.x-121}`;labelX=(a.x+b.x)/2;labelY=a.y-9;}
+  else if(a.x===b.x){path=`M${a.x} ${a.y+28} V${b.y-33}`;labelX=a.x+52;labelY=(a.y+b.y)/2+3;}
+  else {path=`M${a.x} ${a.y+28} L${b.x} ${b.y-33}`;labelX=(a.x+b.x)/2+30;labelY=(a.y+b.y)/2-5;}
+  svg+=`<g class="map-edge ${edge.kind||'data'} ${active.has(a.id)&&active.has(b.id)&&(!edge.branch||edge.branch==='io'&&scene==='io')?'involved':''}"><path d="${path}" marker-end="url(#structure-arrow)"/><text x="${labelX}" y="${labelY}" text-anchor="middle">${escape(edge.label)}</text></g>`;
+ }
+ svg+=components.map(n=>`<g data-component="${n.id}" role="button" tabindex="0" aria-label="${escape(n.name)}，${active.has(n.id)?'涉及当前操作':'其他环节'}，点击查看职责" class="map-node ${active.has(n.id)?'involved':''} ${selectedNode===n.id?'selected':''}"><rect x="${n.x-116}" y="${n.y-27}" width="232" height="54" rx="7"/><text class="map-node-name" x="${n.x}" y="${n.y-2}" text-anchor="middle">${escape(n.name)}</text><text class="map-node-sub" x="${n.x}" y="${n.y+17}" text-anchor="middle">${escape(n.sub)}</text></g>`).join('');
+ $('structure').innerHTML=svg;$('constraint-label').textContent=sync?'本例的同步 / 协议约束':'本例的顺序依据与缺口';$('constraint-chain').innerHTML=orderingChain(trace).map(text=>`<span>${escape(text)}</span>`).join('');showNode(selectedNode);$('operation-contract').textContent=context.contract;$('operation-difference').textContent=context.difference;
+}
+function showNode(id){const n=components.find(n=>n.id===id);selectedNode=id;$('node-title').textContent=n.name;$('node-role').textContent=n.role;$('node-guarantee').textContent=n.guarantee;$('node-limit').textContent=n.limit;document.querySelectorAll('[data-component]').forEach(e=>e.classList.toggle('selected',e.dataset.component===id));}
+function activateMap(e){const node=e.target.closest('[data-component]');if(node)showNode(node.dataset.component);}
+document.querySelectorAll('[data-scroll]').forEach(button=>button.addEventListener('click',()=>$(button.dataset.scroll).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'})));
+function activateEvent(e){const node=e.target.closest('[data-event]');if(node)seek(Number(node.dataset.event)+1);}
+$('operation').addEventListener('change',e=>seek(Number(e.target.value)+1));
+$('structure').addEventListener('click',activateMap);$('timeline').addEventListener('click',activateEvent);
+for(const [element,handler] of [[$('structure'),activateMap],[$('timeline'),activateEvent]])element.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();handler(e);}});
+readHash();rebuild();
